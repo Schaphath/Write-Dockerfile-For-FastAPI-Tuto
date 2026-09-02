@@ -10,4 +10,4 @@ scikit-learn==1.8.0
 pydantic==2.12.5
 
 # Interface 
-streamlit 
+streamlit==1.58.0
