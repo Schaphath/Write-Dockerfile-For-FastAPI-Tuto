@@ -6,6 +6,7 @@ Ce projet montre comment déployer un modèle de machine learning entraîné (is
 ![FastAPI](https://img.shields.io/badge/FastAPI-0.128.0-green)
 ![Docker](https://img.shields.io/badge/Docker-Ready-blue)
 ![License](https://img.shields.io/badge/License-MIT-lightgrey)
+![CI/CD](https://github.com/Madiba/<nom-du-repo>/actions/workflows/cicd.yml/badge.svg)
 
 ---
 
@@ -18,6 +19,7 @@ Ce projet montre comment déployer un modèle de machine learning entraîné (is
 - [Installation & lancement en local](#-installation--lancement-en-local)
 - [Lancement avec Docker](#-lancement-avec-docker)
 - [Utilisation de l'API](#-utilisation-de-lapi)
+- [CI/CD](#-cicd)
 - [Avertissement](#-avertissement)
 - [Auteur](#-auteur)
 
@@ -57,10 +59,11 @@ L'API expose trois endpoints :
 
 ```
 .
-├── app.py                  # Point d'entrée de l'API FastAPI
-├── model/                  # Modèle entraîné (.pkl) et scaler
+├── api.py                  # Point d'entrée de l'API FastAPI
+├── models/                  # Modèle entraîné (.pkl) et scaler
 ├── requirements-prod.txt   # Dépendances Python pour la production
 ├── Dockerfile              # Instructions de build de l'image Docker
+├── VERSION                 # Version sémantique de l'API (ex: 1.0.0)
 └── README.md
 ```
 
@@ -143,21 +146,25 @@ Une fois l'API lancée (en local ou via Docker), voici quelques exemples de requ
 
 ```bash
 curl http://localhost:8000/health
+
 ```
 
 ```json
+
 {
   "status": "healthy",
   "model_loaded": true,
   "scaler_loaded": true,
   "model_version": "1.0.0"
 }
+
 ```
 
 ### `POST /predict`
 
 ```bash
-curl -X 'POST' \
+
+ curl -X 'POST' \
   'http://127.0.0.1:8000/predict' \
   -H 'accept: application/json' \
   -H 'Content-Type: application/json' \
@@ -173,18 +180,76 @@ curl -X 'POST' \
   "symmetry_worst": 0.29,
   "texture_worst": 25.3
 }'
+
 ```
 
 ```json
+
 {
   "prediction": "M",
   "label": "Risque de cancer",
   "probability": 0.979,
   "model_version": "1.0.0"
 }
+
 ```
 
 > ℹ️ Les noms exacts des 10 caractéristiques attendues sont documentés dans le schéma Pydantic de l'API, consultable via `/docs`.
+
+---
+
+## 🔄 CI/CD
+
+Le projet embarque un pipeline **GitHub Actions** (`.github/workflows/cicd.yml`) qui automatise la validation et la publication de l'image Docker sur **Docker Hub**.
+
+### Déclencheurs
+
+| Événement           | Détail                                      |
+|---------------------|----------------------------------------------|
+| `push`               | Sur la branche `main`                        |
+| `schedule`           | Tous les lundis à 9h00 UTC (`0 9 * * 1`)     |
+| `workflow_dispatch`  | Déclenchement manuel depuis GitHub           |
+
+### Jobs
+
+1. **`validate`** — Validation du `Dockerfile`
+   - Génère un `.env` temporaire (à partir de `.env.example` s'il existe, sinon avec des valeurs par défaut).
+   - Analyse le `Dockerfile` avec [Trivy](https://aquasecurity.github.io/trivy/) pour détecter d'éventuelles vulnérabilités de configuration.
+
+2. **`build-and-push`** — Build & publication (déclenché seulement sur la branche `main`, après succès du job `validate`)
+   - Récupère le SHA court du commit.
+   - Configure Docker Buildx (avec cache GitHub Actions).
+   - Se connecte à Docker Hub via des secrets.
+   - Build et push l'image avec **quatre tags** :
+     - `latest`
+     - `v<version>` (version sémantique lue depuis le fichier `VERSION` à la racine du projet)
+     - `v<version>-<numéro_de_run>`
+     - `<sha_court_du_commit>`
+
+> 💡 Pour publier une nouvelle version, mettez simplement à jour le fichier `VERSION` (ex : `1.1.0`) avant de merger sur `main`. Le pipeline se charge automatiquement de taguer l'image en conséquence.
+
+### Secrets requis
+
+À configurer dans **Settings → Secrets and variables → Actions** de votre dépôt GitHub :
+
+| Secret               | Description                              |
+|----------------------|-------------------------------------------|
+| `DOCKERHUB_USERNAME`  | Nom d'utilisateur Docker Hub              |
+| `DOCKERHUB_TOKEN`     | Token d'accès Docker Hub (⚠️ pas votre mot de passe) |
+
+### Récupérer l'image publiée
+
+```bash
+# Dernière version publiée
+docker pull <votre-utilisateur-dockerhub>/cancer-sein-api:latest
+
+# Ou une version précise
+docker pull <votre-utilisateur-dockerhub>/cancer-sein-api:v1.0.0
+
+docker run -d -p 8000:8000 --name api_cancer <votre-utilisateur-dockerhub>/cancer-sein-api:latest
+```
+
+> ⚠️ Le job `validate` génère un rapport Trivy mais ne bloque pas actuellement le pipeline en cas de vulnérabilité détectée (la commande se termine toujours avec succès). Pensez à ajuster ce comportement si vous voulez qu'une vulnérabilité critique interrompe le déploiement.
 
 ---
 
@@ -192,7 +257,7 @@ curl -X 'POST' \
 
 Cette API a un **but purement démonstratif** : illustrer comment passer d'un modèle entraîné dans un notebook à une API packagée dans une image Docker.
 
-Elle **ne doit pas être utilisée à des fins de diagnostic médical réel**. Vous êtes libre de reprendre, modifier et renforcer le code pour vos propres besoins.
+Elle **ne doit pas être utilisée à des fins de diagnostic médical réel**. Vous êtes libre de reprendre, modifier et renforcer le code pour vos propres besoins (validation des entrées, gestion des erreurs, tests, monitoring, etc.).
 
 ---
 

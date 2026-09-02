@@ -1,2 +1,93 @@
+name: CI/CD Pipeline - Cancer du Sein - FastAPI
 
+on:
+  push:
+    branches: [ "main" ]
+  schedule:
+    # Chaque lundi à 9h00 UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch: # Permet le déclenchement manuel depuis GitHub
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  # JOB 1 : Validation de la sécurité du Dockerfile
+  validate:
+    name: Validation Dockerfile
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Récupération du code
+        uses: actions/checkout@v4
+
+      - name: Création d'un .env temporaire pour la validation
+        run: |
+          if [ -f .env.example ]; then
+            cp .env.example .env
+          else
+            echo "API_VERSION=1.0.0" > .env
+            echo "TIMEZONE=Europe/Paris" >> .env
+            echo "API_PORT=8000" >> .env
+          fi
+
+      - name: Analyse du Dockerfile avec Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: Dockerfile
+          severity: CRITICAL,HIGH
+          exit-code: 1 # Le job échoue si une vulnérabilité critique ou élevée est détectée
+
+  # JOB 2 : Build des images et Publication Docker Hub
+  build-and-push:
+    name: Build & Push vers Docker Hub
+    runs-on: ubuntu-24.04
+    needs: validate
+    # Exécution uniquement depuis la branche main (push, cron ou déclenchement manuel)
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Récupération du code
+        uses: actions/checkout@v4
+
+      - name: Extraction du Git SHA court et de la version
+        id: vars
+        run: |
+          echo "sha_short=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          if [ -f VERSION ]; then
+            echo "version=$(cat VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+          else
+            echo "⚠️ Fichier VERSION introuvable, utilisation de 0.0.0 par défaut"
+            echo "version=0.0.0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Configuration de Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Connexion à Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Build & Push - Image API (avec cache GitHub)
+      - name: Build & Push Image API
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/cancer-sein-api:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/cancer-sein-api:v${{ steps.vars.outputs.version }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/cancer-sein-api:v${{ steps.vars.outputs.version }}-${{ github.run_number }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/cancer-sein-api:${{ steps.vars.outputs.sha_short }}
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,mode=max,scope=api
+
+# Auteur : @Madiba
